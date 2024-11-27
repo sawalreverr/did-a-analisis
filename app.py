@@ -133,9 +133,9 @@ def analyze_file(data):
     progress.progress(100)
 
     col1, col2, col3 = st.columns([2, 3, 2])
-    col1.markdown("**Preprocessing** ✅")
-    col2.markdown("**Feature Extraction** (IndoBERT) ✅")
-    col3.markdown("**Model Testing (XGBoost)** ✅")
+    col1.markdown("Preprocessing ✅")
+    col2.markdown("Feature Extraction (IndoBERT) ✅")
+    col3.markdown("Model Testing (XGBoost) ✅")
 
     # Display the DataFrame
     data['final_prediction'] = predictions
@@ -151,7 +151,10 @@ def analyze_file(data):
     cm_df = pd.DataFrame(cm, columns=["Predicted Negative", "Predicted Positive"], index=["Actual Negative", "Actual Positive"])
 
     st.subheader("Confusion Matrix")
-    st.table(cm_df)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=False, linewidths=1, linecolor='black')
+    plt.title("Confusion Matrix")
+    st.pyplot(fig)
 
     # Performance Evaluation
     report = classification_report(data['actual_label'], predictions, output_dict=True)
@@ -161,9 +164,10 @@ def analyze_file(data):
 
     # Pie chart
     sentiment_counts = pd.Series(predictions).value_counts(normalize=True) * 100
-    fig, ax = plt.subplots()
-    ax.pie(sentiment_counts, labels=["Negatif", "Positif"], autopct='%1.1f%%', colors=['red', 'green'])
-    st.subheader("Distribusi Sentimen")
+    fig, ax = plt.subplots(figsize=(7, 7))
+    colors = sns.color_palette("Set2", 2)
+    ax.pie(sentiment_counts, labels=["Negatif", "Positif"], autopct='%1.1f%%', colors=colors, startangle=90)
+    plt.title("Distribusi Sentimen")
     st.pyplot(fig)
 
 """ # 🐳 did-a-analisis 
