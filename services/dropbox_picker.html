@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Dropbox Picker</title>
+    <script type="text/javascript" src="https://www.dropbox.com/static/api/2/dropins.js"></script>
+    <meta name="dropbox-chooser-app-key" content="YOUR_APP_KEY">
+</head>
+
+<body>
+    <button id="dropbox-button"
+        style="padding: 10px; background-color: #007ee5; color: white; border: none; border-radius: 5px; cursor: pointer;">
+        Select File from Dropbox
+    </button>
+    <script type="text/javascript">
+        var button = Dropbox.createChooseButton({
+            success: function (files) {
+                const params = new URLSearchParams();
+                params.append('fileName', files[0].name);
+                params.append('fileUrl', files[0].link);
+
+                window.location.href = `http://localhost:8501?${params.toString()}`;
+            },
+            linkType: "direct", // URL langsung ke file
+            multiselect: false, // Nonaktifkan multi-select
+            extensions: ['.pdf', '.doc', '.docx', '.png', '.jpg'] // Jenis file yang diizinkan
+        });
+        document.getElementById("dropbox-button").appendChild(button);
+    </script>
+</body>
+
+</html>

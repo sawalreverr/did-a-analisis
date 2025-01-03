@@ -1,2 +1,6 @@
 venv/
 __pycache__/
+token.pickle
+services/credentials.json
+model/*
+!model/.gitkeep

@@ -1,20 +1,21 @@
+import io
 import streamlit as st
 import pandas as pd
 import numpy as np
 import re
-import joblib
 import nltk
 import torch
-import services.google_drive_service as gd 
-import services.dropbox_service as db
+import xgboost as xgb
 from nltk.corpus import stopwords
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
+from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
-from transformers import AutoTokenizer, AutoModel
+from transformers import BertTokenizer, BertForSequenceClassification
 from tqdm import tqdm
 from st_aggrid import AgGrid, GridOptionsBuilder
+from services import google_drive_service as gd
 
 # Streamlit Config
 st.set_page_config(page_icon="🐳", page_title="did-a-analisis" ,layout="centered", )
@@ -31,19 +32,27 @@ def load_stopwords():
 
 stop_words = load_stopwords()
 
-# Load IndoBERT
+# Load resources (fine-tuned BERT and XGBoost model)
 @st.cache_resource
-def load_bert():
-    tokenizer = AutoTokenizer.from_pretrained('indobenchmark/indobert-base-p1')
-    model = AutoModel.from_pretrained('indobenchmark/indobert-base-p1')
-    return tokenizer, model
+def load_fine_tuned_model():
+    fine_tuned_model_path = './model/fine_tuned_model'
+    xgb_model_path = './model/xgboost_model.json'
 
-tokenizer, bert_model = load_bert()
+    tokenizer = BertTokenizer.from_pretrained(fine_tuned_model_path)
+    fine_tuned_model = BertForSequenceClassification.from_pretrained(fine_tuned_model_path)
+    
+    xgb_model = xgb.XGBClassifier()
+    xgb_model.load_model(xgb_model_path)
+
+    label_encoder = LabelEncoder()
+    label_encoder.fit([0, 1])
+    
+    return tokenizer, fine_tuned_model, xgb_model, label_encoder
+
+tokenizer, fine_tuned_model, xgb_model, label_encoder = load_fine_tuned_model()
 
 factory = StemmerFactory()
 stemmer = factory.create_stemmer()
-
-xgboost_model = joblib.load('model/xgboost_optimized_model.pkl')
 
 # Cached stemmer
 def cached_stem(word, cache={}):
@@ -74,14 +83,16 @@ def preprocess_text(text):
 
     return ' '.join(tokens)
 
-# Feature extraction using IndoBERT
-def extract_features(texts, tokenizer, model):
+# Feature extraction using fine-tuned BERT
+def extract_features(texts, model, tokenizer, max_length=128):
+    model.eval()
     features = []
     for text in tqdm(texts, desc="Extracting features"):
-        inputs = tokenizer(text, return_tensors='pt', max_length=128, truncation=True, padding='max_length')
         with torch.no_grad():
-            outputs = model(**inputs)
-        features.append(outputs.last_hidden_state[:, 0, :].numpy().flatten())
+            encodings = tokenizer(text, truncation=True, padding=True, max_length=max_length, return_tensors="pt")
+            outputs = model.bert(**encodings)
+            last_hidden_state = outputs.last_hidden_state
+            features.append(last_hidden_state.mean(dim=1).numpy().flatten())
     return np.array(features)
 
 # Display Helper
@@ -90,6 +101,24 @@ def display_info(message):
         st.session_state['info_shown'] = st.empty()
 
     st.session_state.info_shown.info(message)
+
+# Save file
+def download_results(dataframe, file_format):
+    output = io.BytesIO()
+
+    if file_format == "CSV":
+        dataframe.to_csv(output, index=False)
+        output.seek(0)
+        return output.getvalue()
+    
+    elif file_format == "XLSX":
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            dataframe.to_excel(writer, index=False)
+        output.seek(0)
+        return output.getvalue()
+    
+    else:
+        return None
 
 # Display Table
 def custom_table(df):
@@ -105,13 +134,15 @@ def analyze_text(text):
     display_info("Memproses...")
 
     preprocessed_text = preprocess_text(text)
-    features = extract_features([preprocessed_text], tokenizer, bert_model)
-    prediction = xgboost_model.predict(features)
+    features = extract_features([preprocessed_text], fine_tuned_model, tokenizer)
+    prediction = xgb_model.predict(features)
 
     st.session_state.info_shown.empty()
-    
-    sentiment = "Positif 😊" if prediction[0] == 1 else "Negatif ☹️"
-    st.success(f"Hasil Sentimen: **{sentiment}**")
+
+    if prediction[0] == 1: 
+        st.success("Sentimen Positif 😊")
+    else:
+        st.error("Sentimen Negatif ☹️")
 
 # Analyze file
 def analyze_file(data):
@@ -124,18 +155,18 @@ def analyze_file(data):
 
     # Feature extraction --
     with st.spinner(text="Feature Extraction (IndoBERT)..."):
-        features = extract_features(data['cleaned_text'], tokenizer, bert_model)
+        features = extract_features(data['cleaned_text'], fine_tuned_model, tokenizer)
     progress.progress(70)
     
     # Model testing --
     with st.spinner(text="Model Testing (XGBoost)..."):
-        predictions = xgboost_model.predict(features)
+        predictions = xgb_model.predict(features)
     progress.progress(100)
 
     col1, col2, col3 = st.columns([2, 3, 2])
-    col1.markdown("**Preprocessing** ✅")
-    col2.markdown("**Feature Extraction** (IndoBERT) ✅")
-    col3.markdown("**Model Testing (XGBoost)** ✅")
+    col1.markdown("Preprocessing ✅")
+    col2.markdown("Feature Extraction (IndoBERT) ✅")
+    col3.markdown("Model Testing (XGBoost) ✅")
 
     # Display the DataFrame
     data['final_prediction'] = predictions
@@ -151,7 +182,10 @@ def analyze_file(data):
     cm_df = pd.DataFrame(cm, columns=["Predicted Negative", "Predicted Positive"], index=["Actual Negative", "Actual Positive"])
 
     st.subheader("Confusion Matrix")
-    st.table(cm_df)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=False, linewidths=1, linecolor='black')
+    plt.title("Confusion Matrix")
+    st.pyplot(fig)
 
     # Performance Evaluation
     report = classification_report(data['actual_label'], predictions, output_dict=True)
@@ -161,18 +195,41 @@ def analyze_file(data):
 
     # Pie chart
     sentiment_counts = pd.Series(predictions).value_counts(normalize=True) * 100
-    fig, ax = plt.subplots()
-    ax.pie(sentiment_counts, labels=["Negatif", "Positif"], autopct='%1.1f%%', colors=['red', 'green'])
-    st.subheader("Distribusi Sentimen")
+    fig, ax = plt.subplots(figsize=(7, 7))
+    colors = sns.color_palette("Set2", 2)
+    ax.pie(sentiment_counts, labels=["Negatif", "Positif"], autopct='%1.1f%%', colors=colors, startangle=90)
+    plt.title("Distribusi Sentimen")
     st.pyplot(fig)
 
+    # Download option
+    st.subheader("Download Hasil Analisis")
+    col1, col2, col3 = st.columns([1,2,1])
+    with col1:
+        csv_data = download_results(data, "CSV")
+        st.download_button(
+            label="Download as CSV",
+            data=csv_data,
+            file_name="hasil_analisis.csv",
+            mime="text/csv"
+        )
+    
+    with col2:
+        xlsx_data = download_results(data, "XLSX")
+        st.download_button(
+            label="Download as XLSX",
+            data=xlsx_data,
+            file_name="hasil_analisis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # Streamlit UI
 """ # 🐳 did-a-analisis 
 **did-a-analisis** adalah aplikasi sederhana untuk menganalisis sentimen publik menggunakan IndoBERT dan XGBoost. Aplikasi ini memproses data mengenai topik Ibu Kota Nusantara (IKN), untuk membantu memahami opini masyarakat dengan mudah dan cepat.
 """
 st.divider()
-input_option = st.radio("Pilih metode input:", ["Input Text", "Upload File (.csv/.xlsx)"])
+input_option = st.selectbox("Pilih metode input:", ["Input text", "Upload file"])
 
-if input_option == "Input Text":
+if input_option == "Input text":
     text_input = st.text_area("Masukkan text untuk di analisis:")
     if st.button("Analisis"):
         if text_input.strip():
@@ -201,6 +258,10 @@ else:
 
     elif upload_option == "Google Drive":
         st.write("Upload via Google Drive")
+        if st.button("Authenticate and Show Picker"):
+            oauth_token = gd.authenticate_google_drive()
+            gd.display_picker_html(oauth_token)
+        
 
     elif upload_option == "Dropbox":
         st.write("Upload Via Dropbox")

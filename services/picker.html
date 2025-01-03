@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <script>
+        function loadPicker() {
+            {
+                gapi.load('picker', { "callback": createPicker });
+            }
+        }
+
+        function createPicker() {
+            {
+                const picker = new google.picker.PickerBuilder()
+                    .addView(google.picker.ViewId.DOCS)
+                    .setOAuthToken("{access_token}")
+                    .setDeveloperKey("YOUR_API_KEY")
+                    .setCallback(pickerCallback)
+                    .build();
+                picker.setVisible(true);
+            }
+        }
+
+        function pickerCallback(data) {
+            {
+                if (data.action === google.picker.Action.PICKED) {
+                    {
+                        const fileId = data.docs[0].id;
+                        const fileName = data.docs[0].name;
+                        const fileUrl = "https://drive.google.com/uc?id=" + fileId;
+                        window.parent.postMessage({ "fileName": fileName, "fileUrl": fileUrl }, "*");
+                    }
+                }
+            }
+        }
+    </script>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <button onclick="loadPicker()">Pick File</button>
+</body>
+
+</html>
