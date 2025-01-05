@@ -15,7 +15,6 @@ import seaborn as sns
 from transformers import BertTokenizer, BertForSequenceClassification
 from tqdm import tqdm
 from st_aggrid import AgGrid, GridOptionsBuilder
-from services import google_drive_service as gd
 
 # Streamlit Config
 st.set_page_config(page_icon="🐳", page_title="did-a-analisis" ,layout="centered", )
@@ -168,9 +167,12 @@ def analyze_file(data):
     col2.markdown("Feature Extraction (IndoBERT) ✅")
     col3.markdown("Model Testing (XGBoost) ✅")
 
+    # Decode predictions
+    predicted_labels = ["negatif" if label == 0 else "positif" for label in predictions]
+
     # Display the DataFrame
-    data['final_prediction'] = predictions
-    data.rename(columns={'target': 'actual_label'}, inplace=True)
+    data['final_prediction'] = predicted_labels
+    data.rename(columns={'label': 'actual_label'}, inplace=True)
     
     result_df = data[['tweet', 'actual_label', 'final_prediction']]
     
@@ -178,34 +180,33 @@ def analyze_file(data):
     custom_table(result_df)
     
     # Confusion Matrix
-    cm = confusion_matrix(data['actual_label'], predictions)
+    cm = confusion_matrix(result_df['actual_label'], result_df['final_prediction'])
     cm_df = pd.DataFrame(cm, columns=["Predicted Negative", "Predicted Positive"], index=["Actual Negative", "Actual Positive"])
 
     st.subheader("Confusion Matrix")
     fig, ax = plt.subplots(figsize=(8, 6))
-    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=False, linewidths=1, linecolor='black')
-    plt.title("Confusion Matrix")
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax)
     st.pyplot(fig)
 
     # Performance Evaluation
-    report = classification_report(data['actual_label'], predictions, output_dict=True)
-    eval_df = pd.DataFrame(report).transpose()
     st.subheader("Performance Evaluation")
+    report = classification_report(result_df['actual_label'], result_df['final_prediction'], output_dict=True)
+    eval_df = pd.DataFrame(report).transpose()
     st.table(eval_df)
 
     # Pie chart
-    sentiment_counts = pd.Series(predictions).value_counts(normalize=True) * 100
-    fig, ax = plt.subplots(figsize=(7, 7))
-    colors = sns.color_palette("Set2", 2)
-    ax.pie(sentiment_counts, labels=["Negatif", "Positif"], autopct='%1.1f%%', colors=colors, startangle=90)
-    plt.title("Distribusi Sentimen")
+    sentiment_counts = result_df['final_prediction'].value_counts()
+    st.subheader("Sentiment Distribution")
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(sentiment_counts, labels=sentiment_counts.index, autopct='%1.1f%%', startangle=90, colors=['#ff9999','#66b3ff'])
+    ax.axis('equal')
     st.pyplot(fig)
 
     # Download option
     st.subheader("Download Hasil Analisis")
     col1, col2, col3 = st.columns([1,2,1])
     with col1:
-        csv_data = download_results(data, "CSV")
+        csv_data = download_results(result_df, "CSV")
         st.download_button(
             label="Download as CSV",
             data=csv_data,
@@ -214,7 +215,7 @@ def analyze_file(data):
         )
     
     with col2:
-        xlsx_data = download_results(data, "XLSX")
+        xlsx_data = download_results(result_df, "XLSX")
         st.download_button(
             label="Download as XLSX",
             data=xlsx_data,
@@ -235,33 +236,20 @@ if input_option == "Input text":
         if text_input.strip():
             analyze_text(text_input)
 else:
-    upload_option = st.selectbox("Pilih metode upload:", ["Unggah File Lokal", "Google Drive", "Dropbox"])
+    uploaded_file = st.file_uploader("Upload file (.csv atau .xlsx):", type=["csv", "xlsx"])
 
-    if upload_option == "Unggah File Lokal":
-        uploaded_file = st.file_uploader("Upload file (.csv atau .xlsx):", type=["csv", "xlsx"])
-        if uploaded_file:
-            file_type = uploaded_file.name.split('.')[-1]
-            data = pd.read_csv(uploaded_file) if file_type == 'csv' else pd.read_excel(uploaded_file)
+    if uploaded_file:
+        file_type = uploaded_file.name.split('.')[-1]
+        data = pd.read_csv(uploaded_file) if file_type == 'csv' else pd.read_excel(uploaded_file)
+
+        if "tweet" in data.columns and "label" in data.columns:
+            display_info("Memproses file...")
             
-            if "tweet" in data.columns and "target" in data.columns:
-                display_info("Memproses file...")
-                
-                st.subheader("Data yang Diupload")
-                custom_table(data)
+            st.subheader("Data yang Diupload")
+            custom_table(data)
 
-                st.session_state.info_shown.empty()
-
-                if st.button("Analisis"):
-                    analyze_file(data)
-            else:
-                st.error("File harus memiliki kolom 'tweet' dan 'target'.")
-
-    elif upload_option == "Google Drive":
-        st.write("Upload via Google Drive")
-        if st.button("Authenticate and Show Picker"):
-            oauth_token = gd.authenticate_google_drive()
-            gd.display_picker_html(oauth_token)
-        
-
-    elif upload_option == "Dropbox":
-        st.write("Upload Via Dropbox")
+            st.session_state.info_shown.empty()
+            if st.button("Analisis"):
+                analyze_file(data)
+        else:
+            st.error("File harus memiliki kolom 'tweet' dan 'label'.")
