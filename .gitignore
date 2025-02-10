@@ -4,3 +4,4 @@ token.pickle
 services/credentials.json
 model/*
 !model/.gitkeep
+training/*

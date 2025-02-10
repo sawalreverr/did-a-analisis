@@ -15,8 +15,6 @@ import seaborn as sns
 from transformers import BertTokenizer, BertForSequenceClassification
 from tqdm import tqdm
 from st_aggrid import AgGrid, GridOptionsBuilder
-from streamlit.runtime.scriptrunner import get_script_run_ctx
-
 
 # Streamlit Config
 st.set_page_config(page_icon="🐳", page_title="did-a-analisis" ,layout="centered", )
@@ -36,8 +34,8 @@ stop_words = load_stopwords()
 # Load resources (fine-tuned BERT and XGBoost model)
 @st.cache_resource
 def load_fine_tuned_model():
-    fine_tuned_model_path = './model/fine_tuned_model'
-    xgb_model_path = './model/xgboost_model.json'
+    fine_tuned_model_path = './model/fine_tuned_model_12-01'
+    xgb_model_path = './model/xgboost_model_12_01.json'
 
     tokenizer = BertTokenizer.from_pretrained(fine_tuned_model_path)
     fine_tuned_model = BertForSequenceClassification.from_pretrained(fine_tuned_model_path)
@@ -145,139 +143,88 @@ def analyze_text(text):
     else:
         st.error("Sentimen Negatif ☹️")
 
+# Analyze file
+def analyze_file(data):
+    progress = st.progress(0)
 
-@st.cache_data
-def perform_analysis(_data):
-    """Perform the actual analysis and return all results"""
-    # Preprocessing
-    data = _data.copy()
-    data['cleaned_text'] = data['tweet'].apply(preprocess_text)
+    # Preprocessing --
+    with st.spinner(text="Preprocessing..."):
+        data['cleaned_text'] = data['tweet'].apply(preprocess_text)
+    progress.progress(40)
+
+    # Feature extraction --
+    with st.spinner(text="Feature Extraction (IndoBERT)..."):
+        features = extract_features(data['cleaned_text'], fine_tuned_model, tokenizer)
+    progress.progress(70)
     
-    # Feature extraction
-    features = extract_features(data['cleaned_text'], fine_tuned_model, tokenizer)
-    
-    # Model testing
-    predictions = xgb_model.predict(features)
-    
-    # Process results
+    # Model testing --
+    with st.spinner(text="Model Testing (XGBoost)..."):
+        predictions = xgb_model.predict(features)
+    progress.progress(100)
+
+    col1, col2, col3 = st.columns([2, 3, 2])
+    col1.markdown("Preprocessing ✅")
+    col2.markdown("Feature Extraction (IndoBERT) ✅")
+    col3.markdown("Model Testing (XGBoost) ✅")
+
+    # Decode predictions
     predicted_labels = ["negatif" if label == 0 else "positif" for label in predictions]
+
+    # Display the DataFrame
     data['final_prediction'] = predicted_labels
     data.rename(columns={'label': 'actual_label'}, inplace=True)
     
     result_df = data[['tweet', 'actual_label', 'final_prediction']]
     
-    # Calculate metrics
+    st.subheader("Hasil Prediksi")
+    custom_table(result_df)
+    
+    # Confusion Matrix
     cm = confusion_matrix(result_df['actual_label'], result_df['final_prediction'])
-    cm_df = pd.DataFrame(
-        cm,
-        columns=["Predicted Negative", "Predicted Positive"],
-        index=["Actual Negative", "Actual Positive"]
-    )
-    
-    report = classification_report(
-        result_df['actual_label'],
-        result_df['final_prediction'],
-        output_dict=True
-    )
+    cm_df = pd.DataFrame(cm, columns=["Predicted Negative", "Predicted Positive"], index=["Actual Negative", "Actual Positive"])
+
+    st.subheader("Confusion Matrix")
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax)
+    st.pyplot(fig)
+
+    # Performance Evaluation
+    st.subheader("Performance Evaluation")
+    report = classification_report(result_df['actual_label'], result_df['final_prediction'], output_dict=True)
     eval_df = pd.DataFrame(report).transpose()
-    
+    st.table(eval_df)
+
+    # Pie chart
     sentiment_counts = result_df['final_prediction'].value_counts()
-    
-    return {
-        'result_df': result_df,
-        'cm_df': cm_df,
-        'eval_df': eval_df,
-        'sentiment_counts': sentiment_counts
-    }
+    st.subheader("Distribusi Sentimen")
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.pie(sentiment_counts, labels=sentiment_counts.index, autopct='%1.1f%%', startangle=90, colors=['#ff9999','#66b3ff'])
+    ax.axis('equal')
+    st.pyplot(fig)
 
-if 'analysis_state' not in st.session_state:
-    st.session_state['analysis_state'] = None
-if 'download_clicked' not in st.session_state:
-    st.session_state['download_clicked'] = False
+    # Download option
+    with st.container():
+        st.subheader("Download Hasil Analisis")
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            csv = download_results(result_df, "CSV")
+            st.download_button(
+                label="Download as CSV",
+                data=csv,
+                file_name="hasil_analisis.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with col2:
+            xlsx = download_results(result_df, "XLSX")
+            st.download_button(
+                label="Download as XLSX",
+                data=xlsx,
+                file_name="hasil_analisis.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
-def analyze_file(data):
-    # Perform analysis if not already done or if explicitly requested
-    if st.session_state['analysis_state'] is None:
-        progress = st.progress(0)
-        
-        with st.spinner(text="Preprocessing..."):
-            progress.progress(30)
-            
-        with st.spinner(text="Feature Extraction (IndoBERT)..."):
-            progress.progress(60)
-            
-        with st.spinner(text="Model Testing (XGBoost)..."):
-            results = perform_analysis(data)
-            progress.progress(100)
-            
-        st.session_state['analysis_state'] = results
-
-def display_results():
-    if st.session_state['analysis_state'] is not None:
-        results = st.session_state['analysis_state']
-        
-        # Display completion indicators
-        col1, col2, col3 = st.columns([2, 3, 2])
-        col1.markdown("Preprocessing ✅")
-        col2.markdown("Feature Extraction (IndoBERT) ✅")
-        col3.markdown("Model Testing (XGBoost) ✅")
-
-        # Display predicted results
-        st.subheader("Predicted Results")
-        custom_table(results['result_df'])
-        
-        # Display confusion matrix
-        st.subheader("Confusion Matrix")
-        fig_cm, ax_cm = plt.subplots(figsize=(8, 6))
-        sns.heatmap(results['cm_df'], annot=True, fmt='d', cmap='Blues', cbar=False, ax=ax_cm)
-        st.pyplot(fig_cm)
-
-        # Display performance evaluation
-        st.subheader("Performance Evaluation")
-        st.table(results['eval_df'])
-
-        # Display pie chart
-        st.subheader("Sentiment Distribution")
-        fig_pie, ax_pie = plt.subplots(figsize=(6, 6))
-        ax_pie.pie(
-            results['sentiment_counts'],
-            labels=results['sentiment_counts'].index,
-            autopct='%1.1f%%',
-            startangle=90,
-            colors=['#ff9999','#66b3ff']
-        )
-        ax_pie.axis('equal')
-        st.pyplot(fig_pie)
-
-        # Download buttons in container
-        with st.container():
-            st.subheader("Download Hasil Analisis")
-            col1, col2 = st.columns([1, 1])
-            
-            def on_download_click():
-                st.session_state['download_clicked'] = True
-            
-            with col1:
-                csv = download_results(results['result_df'], "CSV")
-                st.download_button(
-                    label="Download as CSV",
-                    data=csv,
-                    file_name="hasil_analisis.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    on_click=on_download_click
-                )
-            
-            with col2:
-                xlsx = download_results(results['result_df'], "XLSX")
-                st.download_button(
-                    label="Download as XLSX",
-                    data=xlsx,
-                    file_name="hasil_analisis.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    on_click=on_download_click
-                )
     # Streamlit UI
 """ # 🐳 did-a-analisis 
 **did-a-analisis** adalah aplikasi sederhana untuk menganalisis sentimen publik menggunakan IndoBERT dan XGBoost. Aplikasi ini memproses data mengenai topik Ibu Kota Nusantara (IKN), untuk membantu memahami opini masyarakat dengan mudah dan cepat.
@@ -298,20 +245,13 @@ else:
         data = pd.read_csv(uploaded_file) if file_type == 'csv' else pd.read_excel(uploaded_file)
 
         if "tweet" in data.columns and "label" in data.columns:
+            display_info("Memproses file...")
+            
             st.subheader("Data yang Diupload")
             custom_table(data)
 
-            # Add a clear results button
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("Analisis", key="analyze_button"):
-                    st.session_state['analysis_state'] = None
-                    analyze_file(data)
-            with col2:
-                if st.button("Clear Results", key="clear_button"):
-                    st.session_state['analysis_state'] = None
-            
-            # Display results if they exist
-            display_results()
+            st.session_state.info_shown.empty()
+            if st.button("Analisis"):
+                analyze_file(data)
         else:
             st.error("File harus memiliki kolom 'tweet' dan 'label'.")
